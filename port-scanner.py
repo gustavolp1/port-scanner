@@ -1,59 +1,45 @@
-import sys
+import requests
+from bs4 import BeautifulSoup
+import re
+import json
 import socket
 import multiprocessing
-import json
 
-def main():
 
-    print("\nPython Port Scanner")
+def port_scrape():
+    url = "https://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, "html.parser")
 
-    if len(sys.argv) > 4 or len(sys.argv) < 2:
-        print("\nUsage: python3 scan.py <ip> <start_port> <end_port>")
-        sys.exit()
-    
-    target = sys.argv[1]
+    port_service_map = {}
 
-    if not target.isnumeric():
-        try:
-            target = socket.gethostbyname(target)    
-        except socket.gaierror:
-            print("\nERROR: Invalid host name.")
-            sys.exit()
-    
-    print("\nScanning Target: " + target)
-    
-    if len(sys.argv) == 2:
-        start_port = None
-        end_port = None
-    else:
-        start_port = int(sys.argv[2])
-        end_port = int(sys.argv[3])
+    tables = soup.find_all("table", {"class": "wikitable"})
 
-    with multiprocessing.Manager() as manager:
-        closed_ports = manager.list()
-        
-        processes_count = multiprocessing.cpu_count()
-        pool = multiprocessing.Pool(processes=processes_count)
+    for table in tables[1:3]:
+        table_rows = table.find_all("tr")
 
-        if start_port is None:
-            for port in MAIN_PORTS:
-                pool.apply_async(scan_port, args=(target, int(port), closed_ports))
-        else:
-            for port in range(start_port, end_port+1):
-                pool.apply_async(scan_port, args=(target, port, closed_ports))
+        for row in table_rows[1:]:
+            table_columns = row.find_all("td")
 
-        pool.close()
-        pool.join()
+            if len(table_columns) >= 2:
+                try:
+                    if "Yes" in table_columns[1].text:
+                        port_range = table_columns[0].text.strip()
+                        service_name = table_columns[-1].text.strip()
 
-        if closed_ports:
-            print("\nClosed Ports:")
-            print(", ".join(str(port) for port in closed_ports))
-        else:
-            print("\nNo closed ports found.")
+                        cleaned_text = re.sub(r'\[.*?\]', '', service_name)
+
+                        port_service_map[int(port_range)] = cleaned_text
+                except:
+                    continue
+
+    return port_service_map
+
 
 def read_ports():
     with open("scraped_ports.json", "r") as f:
         return json.load(f)
+
 
 def scan_port(target, port, closed_ports):
     try:
@@ -73,6 +59,66 @@ def scan_port(target, port, closed_ports):
     finally:
         s.close()
 
+
+def main():
+    while True:
+        print("\nPython Port Scanner")
+        
+        target = input("Enter target IP or hostname: ")
+
+        try:
+            target = socket.gethostbyname(target)
+        except socket.gaierror:
+            print("\nERROR: Invalid host name.")
+            continue
+        
+        print("\nScanning Target: " + target)
+        
+        port_range_input = input("\nEnter port range (start_port-end_port) or leave blank for common ports: ")
+        
+        if port_range_input:
+            try:
+                start_port, end_port = map(int, port_range_input.split('-'))
+            except ValueError:
+                print("\nERROR: Invalid port range.")
+                continue
+        else:
+            start_port = None
+            end_port = None
+
+        print("\nScanning ports...")
+        
+        with multiprocessing.Manager() as manager:
+            closed_ports = manager.list()
+            processes_count = multiprocessing.cpu_count()
+            pool = multiprocessing.Pool(processes=processes_count)
+
+            if start_port is None:
+                for port in MAIN_PORTS:
+                    pool.apply_async(scan_port, args=(target, int(port), closed_ports))
+            else:
+                for port in range(start_port, end_port + 1):
+                    pool.apply_async(scan_port, args=(target, port, closed_ports))
+
+            pool.close()
+            pool.join()
+
+            if closed_ports:
+                print("\nClosed Ports:")
+                print(", ".join(str(port) for port in closed_ports))
+            else:
+                print("\nNo closed ports found.")
+
+        repeat = input("\nDo you want to perform another scan? (yes/no): ").strip().lower()
+        if repeat != 'yes':
+            break
+
+
 if __name__ == "__main__":
-    MAIN_PORTS = read_ports()
+    print("\nScraping ports...")
+    MAIN_PORTS = port_scrape()
+
+    with open("scraped_ports.json", "w") as f:
+        json.dump(MAIN_PORTS, f)
+
     main()

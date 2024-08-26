@@ -1,3 +1,2 @@
-pyfiglet
 bs4
 requests
